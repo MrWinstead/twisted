@@ -558,6 +558,20 @@ class H2Connection(Protocol, TimeoutMixin):
         """
         headers.insert(0, (b':status', code))
 
+        self.writeHeaderGroup(headers, streamID)
+
+    def writeHeaderGroup(self, headers, streamID):
+        """
+        Called by L{twisted.web.http.Request} objects to write a complete set
+        of HTTP headers to a stream.
+
+        @param headers: The headers to write to the stream.
+        @type headers: L{twisted.web.http_headers.Headers}
+
+        @param streamID: The ID of the stream to write the headers to.
+        @type streamID: L{int}
+        """
+
         try:
             self.conn.send_headers(streamID, headers)
         except h2.exceptions.StreamClosedError:
@@ -567,7 +581,6 @@ class H2Connection(Protocol, TimeoutMixin):
             return
         else:
             self.transport.write(self.conn.data_to_send())
-
 
     def writeDataToStream(self, streamID, data):
         """
@@ -1061,6 +1074,20 @@ class H2Stream(object):
             names and header values.
         """
         self._conn.writeHeaders(version, code, reason, headers, self.streamID)
+
+    # Methods called by the consumer (usually an IRequest).
+    def writeHeaderGroup(self, headers):
+        """
+        Called by the consumer to write headers to the stream.
+
+        @param name: The header name
+        @type value: L{bytes}
+
+        @param headers: The HTTP response headers.
+        @type: Any iterable of two-tuples of L{bytes}, representing header
+            names and header values.
+        """
+        self._conn.writeHeaderGroup(headers, self.streamID)
 
 
     def requestDone(self, request):
