@@ -56,14 +56,17 @@ __all__ = [
 
 
 # system imports
-import tempfile
-import base64, binascii
-import cgi
-import math
-import time
+import base64
+import binascii
 import calendar
-import warnings
+import cgi
+import enum
+import math
+import tempfile
+import time
 import os
+import warnings
+
 from io import BytesIO as StringIO
 
 try:
@@ -103,10 +106,10 @@ from twisted.protocols import policies, basic
 
 from twisted.web.iweb import (
     IRequest, IAccessLogFormatter, INonQueuedRequestFactory)
-from twisted.web.http_headers import Headers
+from twisted.web.http_headers import Headers, HeaderName
 
 try:
-    from twisted.web._http2 import H2Connection
+    from twisted.web._http2 import H2Connection, NeedTrailerInterface
     H2_ENABLED = True
 except ImportError:
     H2Connection = None
@@ -375,6 +378,13 @@ def parseContentRange(header):
     return (start, end, realLength)
 
 
+class HTTPVersions(enum.Enum):
+    """
+    Enumeration of the different versions of HTTP
+    """
+    http10 = b"HTTP/1.0"
+    http11 = b"HTTP/1.1"
+    http20 = b"HTTP/2"
 
 class _IDeprecatedHTTPChannelToRequestInterface(Interface):
     """
@@ -669,6 +679,10 @@ class Request:
     @type responseHeaders: L{http_headers.Headers}
     @ivar responseHeaders: All HTTP response headers to be sent.
 
+    @type responseTrailers: L{http_headers.Headers}
+    @ivar responseTrailers: All HTTP response trailers to be sent if the
+        underlying protocol supports it.
+
     @ivar notifications: A C{list} of L{Deferred}s which are waiting for
         notification that the response to this request has been finished
         (successfully or with an error).  Don't use this attribute directly,
@@ -681,13 +695,13 @@ class Request:
     """
     producer = None
     finished = 0
+    chunked = False
     code = OK
     code_message = RESPONSES[OK]
     method = "(no method yet)"
     clientproto = b"(no clientproto yet)"
     uri = "(no uri yet)"
     startedWriting = 0
-    chunked = 0
     sentLength = 0 # content-length of response, or total bytes sent via chunking
     etag = None
     lastModified = None
@@ -708,6 +722,7 @@ class Request:
         self.requestHeaders = Headers()
         self.received_cookies = {}
         self.responseHeaders = Headers()
+        self.responseTrailers = Headers()
         self.cookies = [] # outgoing cookies
         self.transport = self.channel.transport
 
@@ -982,7 +997,6 @@ class Request:
         self.notifications.append(Deferred())
         return self.notifications[-1]
 
-
     def finish(self):
         """
         Indicate that all response data has been written to this L{Request}.
@@ -1000,8 +1014,27 @@ class Request:
             self.write(b'')
 
         if self.chunked:
-            # write last chunk and closing CRLF
-            self.channel.write(b"0\r\n\r\n")
+            # write last chunk
+            self.channel.write(b"0\r\n")
+
+        rawTrailers = self.responseTrailers.getAllRawHeaders()
+        if 0 < self.responseTrailers.getHeaderCount():
+            if hasattr(self.channel, "writeHeaderGroup"):
+                trailers = list()
+                for name, values in rawTrailers:
+                    for value in values:
+                        trailers.append((name, value,))
+                self.channel.writeHeaderGroup(trailers)
+
+            else:
+                warnings.warn("trailers were set, but channel for request does "
+                              "not have writeHeaderGroup method to facilitate "
+                              "sending trailers", category=NeedTrailerInterface,
+                              stacklevel=2)
+
+        # In both cases of trailers and chunked encoding, need terminal CRLF
+        if self.chunked or 0 < self.responseTrailers.getHeaderCount():
+            self.channel.write(b"\r\n")
 
         # log request
         if (hasattr(self.channel, "factory") and
@@ -1051,6 +1084,11 @@ class Request:
 
             if self.etag is not None:
                 self.responseHeaders.setRawHeaders(b'ETag', [self.etag])
+
+            trailer_header_values = [
+                name for name, _ in self.responseTrailers.getAllRawHeaders()]
+            if 0 < len(trailer_header_values):
+                self.setHeader(HeaderName.trailer.value, trailer_header_values)
 
             for name, values in self.responseHeaders.getAllRawHeaders():
                 for value in values:
@@ -1183,7 +1221,6 @@ class Request:
         else:
             self.code_message = RESPONSES.get(code, b"Unknown Status")
 
-
     def setHeader(self, name, value):
         """
         Set an HTTP response header.  Overrides any previously set values for
@@ -1196,6 +1233,20 @@ class Request:
         @param value: The value to set for the named header.
         """
         self.responseHeaders.setRawHeaders(name, [value])
+
+    def setTrailer(self, name, value):
+        """
+        Set an HTTP response Trailer.  Overrides any previously set values for
+        this trailer. If called before write(), this will ensure that the
+        'Trailer' header is sent before the message body for all trailers.
+
+        @type name: C{bytes}
+        @param name: The name of the header for which to set the value.
+
+        @type value: C{bytes}
+        @param value: The value to set for the named header.
+        """
+        self.responseTrailers.setRawHeaders(name, [value])
 
 
     def redirect(self, url):

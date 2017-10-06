@@ -30,7 +30,7 @@ from twisted.internet.address import IPv4Address
 skipH2 = None
 
 try:
-    from twisted.web._http2 import H2Connection
+    from twisted.web._http2 import H2Connection, H2Stream
 
     # These third-party imports are guaranteed to be present if HTTP/2 support
     # is compiled in. We do not use them in the main code: only in the tests.
@@ -391,6 +391,27 @@ class DummyProducerHandler(http.Request):
 DummyProducerHandlerProxy = _makeRequestProxyFactory(DummyProducerHandler)
 
 
+class DummyHTTPHandlerWithTrailers(http.Request):
+    """
+    An HTTP request handler which responds with a body and
+    """
+
+    responseTrailers = (
+        (b"x-test-trailer", b"a trailer",),
+        (b"x-test-trailer2", b"another trailer",),
+    )
+
+    def process(self):
+        self.setResponseCode(200)
+        for name, value in HTTP2ServerTests.getRequestHeaders:
+            self.setHeader(name, value)
+        for name, value in DummyHTTPHandlerWithTrailers.responseTrailers:
+            self.setTrailer(name, value)
+        self.write(HTTP2ServerTests.getResponseData)
+
+DummyHTTPHandlerWithTrailersProxy = _makeRequestProxyFactory(
+    DummyHTTPHandlerWithTrailers)
+
 
 class NotifyingRequestFactory(object):
     """
@@ -420,7 +441,6 @@ class NotifyingRequestFactory(object):
 NotifyingRequestFactoryProxy = _makeRequestProxyFactory(
     NotifyingRequestFactory
 )
-
 
 
 class HTTP2TestHelpers(object):
@@ -1650,6 +1670,21 @@ class HTTP2ServerTests(unittest.TestCase, HTTP2TestHelpers):
 
         return d
 
+    def test_sendTrailers(self):
+        """
+        """
+        connection = H2Connection()
+        connection.requestFactory = DummyHTTPHandlerProxy
+        requestHeaders = list(self.getRequestHeaders)
+        _, transport = self.connectAndReceive(
+            connection, requestHeaders, []
+        )
+
+        def validate(streamID):
+            self.assertTrue(True)
+
+
+        return connection._streamCleanupCallbacks[1].addCallback(validate)
 
 
 class H2FlowControlTests(unittest.TestCase, HTTP2TestHelpers):
@@ -2857,3 +2892,4 @@ class HTTP2TimeoutTests(unittest.TestCase, HTTP2TestHelpers):
         # transports, including TCP and TLS. We don't have anything we can
         # assert on here: this just must not explode.
         conn.connectionLost(error.ConnectionDone)
+

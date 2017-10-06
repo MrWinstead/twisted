@@ -8,6 +8,10 @@ An API for storing HTTP header names and values.
 
 from __future__ import division, absolute_import
 
+
+import enum
+
+
 from twisted.python.compat import comparable, cmp, unicode
 
 
@@ -23,6 +27,12 @@ def _dashCapitalize(name):
     """
     return b'-'.join([word.capitalize() for word in name.split(b'-')])
 
+
+class HeaderName(enum.Enum):
+    """
+    Names of common HTTP headers, as UTF-8 L{bytes}
+    """
+    trailer = b"Trailer"
 
 
 @comparable
@@ -256,6 +266,14 @@ class Headers(object):
         for k, v in self._rawHeaders.items():
             yield self._canonicalNameCaps(k), v
 
+    def getHeaderCount(self):
+        """
+        Return the number of header names stored in this Headers object.
+
+        @rtype: L{int}
+        @return: number of headers
+        """
+        return len(self._rawHeaders)
 
     def _canonicalNameCaps(self, name):
         """
@@ -271,5 +289,4 @@ class Headers(object):
         return self._caseMappings.get(name, _dashCapitalize(name))
 
 
-
-__all__ = ['Headers']
+__all__ = ['Headers', HeaderName.__class__.__name__]

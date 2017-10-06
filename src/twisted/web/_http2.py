@@ -62,7 +62,17 @@ if sys.version_info < (2, 7, 4):
     )
     raise ImportError("HTTP/2 not supported on this Python version.")
 
+class NeedTrailerInterface(FutureWarning):
+    """
+    Warning in place which is designed to place warnings where shifty parts of
+    the HTTP2.0 support are used if something expected isn't there.
 
+    Example:
+        In the case of H2Connection.writeHeaderGroup, it is there to support
+    writing headers AND trailers. This could also be written with specific
+    writeHeaders and writeTrailers methods; it may be written with those
+    methods in the future. Thus, in places where
+    """
 
 @implementer(IProtocol, IPushProducer)
 class H2Connection(Protocol, TimeoutMixin):
